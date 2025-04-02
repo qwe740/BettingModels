@@ -33,7 +33,7 @@ games_df.to_sql("games", conn, if_exists="replace", index=False)
 #Pull Lines Data
 lines_data = []
 for year in range(2013, 2025):
-    print(f"Pulling lines for {year}...")
+    #print(f"Pulling lines for {year}...")
     data = get_data("lines", {"year": year, "division": "fbs"})
     lines_data.extend(data)
 
@@ -57,8 +57,6 @@ for game in lines_data:
             })
 
 lines_df = pd.DataFrame(flat_lines)
-print(lines_df.shape)
-lines_df.head()  # Check it out
 
 #Cell 6
 #Save to SQLite
@@ -91,9 +89,6 @@ merged_df = pd.read_sql_query(query, conn)
 # Overwrite games table with new data (no spread_open)
 merged_df.to_sql("games", conn, if_exists="replace", index=False)
 
-# Verify
-print(merged_df.shape)
-merged_df.head()
 
 conn.close()
 
@@ -101,14 +96,12 @@ conn.close()
 # Cell 8: Pull Advanced Stats
 advanced_stats_data = []
 for year in range(2013, 2025):
-    print(f"Pulling advanced stats for {year}...")
+    #print(f"Pulling advanced stats for {year}...")
     data = get_data("stats/game/advanced", {"year": year, "excludeGarbageTime":"true", "division": "fbs"})
     advanced_stats_data.extend(data)
 
 # Create DataFrame
 advanced_stats_df = pd.DataFrame(advanced_stats_data)
-print(advanced_stats_df.shape)
-advanced_stats_df.head()  # Check the data
 
 #Cell 9
 # Flatten the nested JSON
@@ -139,8 +132,6 @@ for game in advanced_stats_data:
 
 # Create DataFrame
 advanced_stats_df = pd.DataFrame(flat_stats)
-print(advanced_stats_df.shape)
-advanced_stats_df.head()  # Check the data
 
 #Cell 10
 # Save to SQLite
@@ -281,7 +272,6 @@ games_with_stats_df = pd.read_sql_query(query, conn)
 # Save as new table
 games_with_stats_df.to_sql("games_with_stats", conn, if_exists="replace", index=False)
 
-print(games_with_stats_df.shape)
 
 conn.close()
 
@@ -300,7 +290,7 @@ def time_to_seconds(time_str):
 games_teams_data = []
 for year in range(2013, 2025):
     for week in range(1, 17):  # Weeks 1-15
-        print(f"Pulling games/teams for {year}, Week {week}...")
+        #print(f"Pulling games/teams for {year}, Week {week}...")
         data = get_data("games/teams", {"year": year, "week": week, "division": "fbs"})
         games_teams_data.extend(data)
 
@@ -327,8 +317,6 @@ for game in games_teams_data:
 
 # Create DataFrame
 teams_stats_df = pd.DataFrame(flat_teams)
-print(teams_stats_df.shape)
-teams_stats_df.head()  # Check it
 
 #Cell 13
 # Save to SQLite
@@ -356,8 +344,5 @@ LEFT JOIN
 # Load and save
 games_full_df = pd.read_sql_query(query, conn)
 games_full_df.to_sql("games_full", conn, if_exists="replace", index=False)
-
-print(games_full_df.shape)
-games_full_df.head()
 
 conn.close()
