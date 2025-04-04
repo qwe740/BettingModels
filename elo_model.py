@@ -6,23 +6,23 @@ import math
 # --- Configuration Parameters (Tunable) ---
 INITIAL_ELO_FBS = 1500
 INITIAL_ELO_FCS = 1200
-HFA = 65  # Home Field Advantage in Elo points (common value, needs tuning)
-K_FACTOR = 25 # Elo K-factor (controls update magnitude)
+HFA = -101.1125  # Home Field Advantage in Elo points (common value, needs tuning)
+K_FACTOR = 37.5499 # Elo K-factor (controls update magnitude)
 MEAN_REGRESSION_TARGET_FBS = 1500
 MEAN_REGRESSION_TARGET_FCS = 1200
 # % of previous season's rating gap (vs mean) to keep. 0 = full reset, 1 = no regression
-SEASON_REGRESSION_BASE = 0.60
+SEASON_REGRESSION_BASE = 0.8412
 # How much returning production % influences the regression factor.
 # E.g., RP_FACTOR=0.4 means a team with 100% RP keeps an extra 40% of its rating gap,
 # a team with 50% RP keeps an extra 20%, 0% RP keeps 0% extra.
-RETURNING_PROD_FACTOR = 0.40
+RETURNING_PROD_FACTOR = 0.9175
 # Use 'percentPPA' or 'usage' from returning_production? Let's start with usage.
 RP_METRIC = 'usage'
 # Fallback RP value if missing for a team (treat as average)
 DEFAULT_RP = 0.5
 #MOV scalars for tuning
-MOV_DENOMINATOR_BASE = 2.2 # Part of the MoV multiplier calculation
-MOV_ELO_DIFF_SENSITIVITY = 0.001 # Part of the MoV multiplier calculation (adjusts effect based on elo diff)
+MOV_DENOMINATOR_BASE = 6.7432 # Part of the MoV multiplier calculation
+MOV_ELO_DIFF_SENSITIVITY = 0.0025 # Part of the MoV multiplier calculation (adjusts effect based on elo diff)
 # Fundamental Constants for ELO Models
 ELO_SCALING_FACTOR = 400.0 # Standard Elo scaling factor
 ELO_EXP_BASE = 10.0        # Standard Elo exponent base
@@ -94,7 +94,7 @@ def calculate_mov_multiplier(margin, elo_diff):
 
 def calculate_expected_score(rating_home, rating_away):
     """Calculates the expected score (win probability) for the home team."""
-    return 1.0 / (1.0 + 10.0**((rating_away - rating_home) / 400.0))
+    return 1.0 / (1.0 + ELO_EXP_BASE**((rating_away - rating_home) / ELO_SCALING_FACTOR))
 
 def run_elo_calculation(games_df, rp_df):
     """Calculates Elo ratings iteratively through the game data."""
@@ -217,3 +217,43 @@ def run_elo_calculation(games_df, rp_df):
     # Convert pre-game Elo list to DataFrame
     pre_game_elo_df = pd.DataFrame(pre_game_elos)
     return elo_ratings, pre_game_elo_df
+
+# --- Main Execution ---
+if __name__ == '__main__':
+    conn = connect_db()
+    games_df, rp_df = load_data(conn)
+
+    final_elos, pre_game_elo_df = run_elo_calculation(games_df, rp_df)
+
+    # --- Merge Elo back into games data ---
+    # Use game_id for robust merging
+    games_with_elo = pd.merge(games_df, pre_game_elo_df[['game_id', 'home_pregame_elo', 'away_pregame_elo']],
+                                left_on='id', right_on='game_id', how='left')
+
+    # --- Basic Evaluation / Next Steps ---
+    # 1. Calculate Predicted Spread based on Elo
+    games_with_elo['predicted_spread_elo'] = games_with_elo['away_pregame_elo'] - games_with_elo['home_pregame_elo'] + HFA
+    # Adjust for neutral site if needed (remove HFA)
+    games_with_elo.loc[games_with_elo['neutral_site'] == 1, 'predicted_spread_elo'] -= HFA
+
+    # 2. Compare predicted_spread_elo with avg_closing_spread
+    # Need to drop games where closing spread is missing for fair comparison
+    eval_df = games_with_elo.dropna(subset=['avg_closing_spread', 'predicted_spread_elo']).copy()
+    if not eval_df.empty:
+        mae = np.mean(np.abs(eval_df['predicted_spread_elo'] - eval_df['avg_closing_spread']))
+        correlation = eval_df['predicted_spread_elo'].corr(eval_df['avg_closing_spread'])
+        print(f"\nEvaluation vs Closing Spread:")
+        print(f"  Mean Absolute Error (MAE): {mae:.4f}")
+        print(f"  Correlation: {correlation:.4f}")
+
+        # Check bias
+        bias = np.mean(eval_df['predicted_spread_elo'] - eval_df['avg_closing_spread'])
+        print(f"  Bias (Predicted - Actual): {bias:.4f}")
+    else:
+        print("\nCould not perform evaluation: No games with both predicted Elo spread and closing spread.")
+
+    # 4. Save results (Optional)
+    # games_with_elo.to_csv("games_with_pregame_elo.csv", index=False)
+    # final_ratings_df.to_csv("final_team_elos.csv", index=False)
+
+    conn.close()
