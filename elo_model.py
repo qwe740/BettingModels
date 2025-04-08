@@ -253,7 +253,6 @@ if __name__ == '__main__':
         print("\nCould not perform evaluation: No games with both predicted Elo spread and closing spread.")
 
     # 4. Save results (Optional)
-    # games_with_elo.to_csv("games_with_pregame_elo.csv", index=False)
-    # final_ratings_df.to_csv("final_team_elos.csv", index=False)
-
+    pre_game_elo_df.to_csv("games_with_pregame_elo.csv", index=False)
+    
     conn.close()
