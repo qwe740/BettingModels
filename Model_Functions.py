@@ -1318,7 +1318,7 @@ def predict_test_set(final_model, dtest, y_test):
     return predictions_test_series, y_pred_test
 
 # Evaluate Statistical Metrics on Test Set
-def evaluate_model_statistics(y_test, y_pred_test, predictions_test_series, test_df, val_required_cols):
+def evaluate_model_statistics(y_test, y_pred_test, predictions_test_series, test_df, val_required_cols, LOSS_AMOUNT):
     print("\n--- Test Set Statistical Performance ---")
 
     rmse_test = np.sqrt(mean_squared_error(y_test, y_pred_test))
