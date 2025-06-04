@@ -7,26 +7,13 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import seaborn as sns
 from opponent_adjustments import get_opponent_adjustments
-
-# Config - Major Inputs
-DB_PATH = "cfb_data.db"
-PRE_GAME_ELO_CSV_PATH = 'games_with_pregame_elo.csv'
-#Define RP metrics to load and use
-RP_METRICS_TO_USE =['usage','percentPPA']
-# Define dfault value for missing RP data (e.g., average)
-DEFAULT_RP_VALUE = 0.5
-# Define how many weeks RP features should be active
-RP_ACTIVE_WEEKS = 4
-#Betting Parameters
-BET_THRESHOLD = 0.5
-WIN_PAYOUT = 0.909
-LOSS_AMOUNT = 1
-# EWMA Parameters
-EWMA_SPAN = 5
-min_periods_for_ewma = max(1, EWMA_SPAN // 2)
-# Train / Test Split Years
-TRAIN_END_SEASON = 2020
-VALIDATION_END_SEASON = 2022
+import xgboost as xgb
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import time
+import warnings
+import math
+from tqdm import tqdm
+import optuna
 
 
 # Mount with Colab
@@ -202,6 +189,7 @@ def preprocess_returning_prod_data(rp_df, RP_METRICS_TO_USE, DEFAULT_RP_VALUE):
     rp_df.fillna({col: DEFAULT_RP_VALUE for col in RP_METRICS_TO_USE}, inplace=True)
     # Prepare for merge - RP data for season S applies to season S games
     rp_df.rename(columns={'season': 'rp_season'}, inplace=True) # Avoid collision with game season
+    return rp_df
 
 # Load Pre-Calculated ELO Ratings
 def load_ELO_ratings(PRE_GAME_ELO_CSV_PATH):
@@ -574,7 +562,7 @@ def create_returning_prod_features(master_df, RP_METRICS_TO_USE, RP_ACTIVE_WEEKS
     potential_features = sorted(list(set(potential_features)))
 
     print(f"Total potential features (incl. Seasonal EWMA & Conditional RP): {len(potential_features)}")
-    return master_df, potential_features
+    return master_df, potential_features, basic_features
 
 # Inpsect Engineered Features - Unnecessary
 
@@ -627,7 +615,7 @@ def drop_fcs_games(master_df):
 # Verify - Unncecessary
 
 # Preparation - Temporal Split
-def temporal_split(TRAIN_END_SEASON, VALIDATION_END_SEASON, master_df):
+def temporal_split(TRAIN_END_SEASON, VALIDATION_END_SEASON, master_df, target_variable, potential_features):
     # Define split points (adjust seasons as needed based on your data range)
     # Example: Train through 2020, Validate on 2021-2022, Test on 2023+
     print(f"Splitting data chronologically:")
@@ -674,10 +662,10 @@ def temporal_split(TRAIN_END_SEASON, VALIDATION_END_SEASON, master_df):
     print(f"Temporarily imputed {len(features_with_nan)} columns.")
     print(f"NaN check after imputation (X_train): {X_train_analysis.isnull().sum().sum()}") # Should be 0
     print(f"NaN check after imputation (X_val):   {X_val_analysis.isnull().sum().sum()}")   # Should be 0
-    return y_train, X_train, y_val, X_val, X_train_analysis, X_val_analysis
+    return y_train, X_train, y_val, X_val, X_train_analysis, X_val_analysis, val_df, train_df
 
 # Initial Filtering
-def perform_initial_filtering():
+def perform_initial_filtering(X_train_analysis,X_train, train_df):
     # --- 1a: Low Variance Feature Removal ---
     print("\n--- Filtering: Low Variance Features ---")
     variance_threshold = 0.005 # Remove features with variance below this (tweak if needed)
@@ -729,9 +717,10 @@ def perform_initial_filtering():
         print(f"Features remaining after missing value filter: {len(current_features)}")
     else:
         print("No features dropped by high missing value threshold.")
+    return current_features
 
-# Correlation Analysis
-def perform_target_correlation_analysis(X_train_analysis, y_train):
+# Correlation Analysis: Target-Feature
+def perform_target_correlation_analysis(X_train_analysis, y_train, current_features, target_variable):
     print("\n--- Analysis: Feature-Target Correlation ---")
     # Combine X_train and y_train temporarily for correlation calculation
     train_corr_df = X_train_analysis[current_features].copy()
@@ -755,7 +744,6 @@ def perform_target_correlation_analysis(X_train_analysis, y_train):
     plt.grid(True, axis='y', linestyle='--', alpha=0.7)
     plt.show()
 
-def perform_feature_feature_correlation_analysis():
     # --- 2b: Feature-Feature Correlation ---
     print("\n--- Analysis: Feature-Feature Correlation ---")
     feature_corr_matrix = X_train_analysis.corr()
@@ -792,6 +780,616 @@ def perform_feature_feature_correlation_analysis():
 
         print(f"\nTotal features suggested for dropping due to high correlation: {len(features_to_consider_dropping_corr)}")
         # print("Candidates for dropping:", list(features_to_consider_dropping_corr)) # Uncomment to see full list
-    return features_to_consider_dropping_corr
+    return features_to_consider_dropping_corr, correlations_abs
+
+# Model Based Importance of Features
+def perform_model_based_importance(X_train, X_train_analysis, y_train, current_features):
+    print("\n--- Analysis: Model-Based Feature Importance (GPU Accelerated XGBoost) ---")
+
+    # Use the imputed data (X_train, y_train)
+
+    # Define basic XGBoost parameters for importance calculation
+    xgb_importance_params = {
+        'objective': 'reg:squarederror',
+        'eval_metric': 'rmse',
+        'seed': 42,
+        'nthread': -1,
+        # --- Enable GPU ---
+        'device': 'cuda',
+        # ------------------
+        # Use relatively simple settings for speed
+        'eta': 0.1,
+        'max_depth': 5,
+        'subsample': 0.8,
+        'colsample_bytree': 0.8
+    }
+    num_round_importance = 100 # Fewer rounds might suffice for ranking
+
+    print(f"Training initial XGBoost model on GPU for feature importance...")
+    dtrain_importance = xgb.DMatrix(X_train_analysis[current_features], label=y_train)
+    model_importance = xgb.train(
+        xgb_importance_params,
+        dtrain_importance,
+        num_boost_round=num_round_importance,
+        verbose_eval=False
+    )
+
+    # Get feature importances (using 'gain' is often good)
+    importance_dict = model_importance.get_score(importance_type='gain')
+    if not importance_dict:
+        importance_dict = model_importance.get_score(importance_type='weight') # Fallback
+
+    # Create DataFrame - Need to handle features potentially not used
+    all_features = X_train.columns.tolist()
+    importance_values = [importance_dict.get(f, 0) for f in all_features] # Assign 0 if feature not used
+
+    feature_importance_df = pd.DataFrame({
+        'feature': all_features,
+        'importance': importance_values
+    }).sort_values('importance', ascending=False)
 
 
+    print("\nTop 30 Features by XGBoost Importance (Gain):")
+    print(feature_importance_df.head(30))
+    print("\nBottom 10 Features by XGBoost Importance (Gain):")
+    print(feature_importance_df.tail(10))
+
+    # Optional: Plot top N feature importances
+    plt.figure(figsize=(10, 8))
+    sns.barplot(x='importance', y='feature', data=feature_importance_df.head(30), palette='viridis')
+    plt.title('Top 30 Feature Importances (Random Forest)')
+    plt.tight_layout()
+    plt.show()
+
+    # Store the current list of features after initial filtering
+    features_after_initial_analysis = current_features
+    print(f"\nFeatures remaining after initial filtering & analysis: {len(features_after_initial_analysis)}")
+
+    print("\n--- Phase 2, Step 1 (Initial Analysis/Filtering) Complete ---")
+    return features_after_initial_analysis, feature_importance_df
+
+# Define Candidate Feature Sets
+def define_candidate_feature_sets(basic_features, features_after_initial_analysis, features_to_consider_dropping_corr, feature_importance_df, correlations_abs):
+    candidate_feature_sets = {}
+
+    # Set A: Basic Features Only (Baseline)
+    candidate_feature_sets['A_Basic'] = [f for f in basic_features if f in features_after_initial_analysis]
+
+    # Set B: Top N by Absolute Correlation with Target
+    N_corr = 50 # Example: Top 100
+    top_corr_features = correlations_abs.head(N_corr).index.tolist()
+    candidate_feature_sets[f'B_Top{N_corr}_Corr'] = [f for f in top_corr_features if f in features_after_initial_analysis]
+
+    # Set C: Top N by Random Forest Importance
+    N_rf = 50 # Example: Top 100
+    top_rf_features = feature_importance_df['feature'].head(N_rf).tolist()
+    candidate_feature_sets[f'C_Top{N_rf}_RF_Importance'] = [f for f in top_rf_features if f in features_after_initial_analysis]
+
+    # Set D: Features after removing high inter-feature correlation candidates
+    # Start with all features after initial filtering
+    features_after_corr_drop = [f for f in features_after_initial_analysis if f not in features_to_consider_dropping_corr]
+    candidate_feature_sets['D_Reduced_Correlation'] = features_after_corr_drop
+
+    # Set E: All features remaining after initial filtering (Variance/Missing)
+    candidate_feature_sets['E_All_Initial_Filtered'] = features_after_initial_analysis
+
+    # Optional: Combine Top RF + Basic Features
+    combined_rf_basic = list(set(top_rf_features + candidate_feature_sets['A_Basic']))
+    candidate_feature_sets[f'F_Top{N_rf}_RF_plus_Basic'] = [f for f in combined_rf_basic if f in features_after_initial_analysis]
+
+
+    print(f"\nDefined {len(candidate_feature_sets)} candidate feature sets:")
+    for name, features in candidate_feature_sets.items():
+        print(f"  - {name}: {len(features)} features")
+    return candidate_feature_sets
+
+# Create Betting Model
+def simulate_betting(simulation_input_df, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD):
+    """
+    Simulates the betting strategy on provided data with predictions.
+    Expects 'predicted_spread_market', 'avg_opening_spread', 'home_points',
+    'away_points', and other game identifiers.
+    Returns a DataFrame with results for each potential bet.
+    """
+    results = []
+
+    # Ensure necessary columns exist and drop rows with missing critical data for simulation
+    required_cols = ['id', 'season', 'week', 'home_team', 'away_team', 'home_points', 'away_points',
+                     'avg_opening_spread', 'neutral_site', # neutral_site might not be needed if HFA baked into prediction
+                     'predicted_spread_market'] # This comes from the model now
+    sim_df = simulation_input_df[required_cols].copy()
+    sim_df.dropna(subset=['avg_opening_spread', 'home_points', 'away_points',
+                           'predicted_spread_market'], inplace=True) # Crucial dropna
+
+    if sim_df.empty:
+        print("Warning: No games available for betting simulation after dropping NaNs.")
+        return pd.DataFrame() # Return empty DataFrame
+
+    # print(f"Simulating bets for {len(sim_df)} games...") # Optional debug
+
+    for index, game in sim_df.iterrows():
+        predicted_spread = game['predicted_spread_market']
+        opening_spread = game['avg_opening_spread']
+
+        bet_on = None
+        profit_loss = 0.0
+        result = 'no_bet' # Default if threshold not met
+        difference = predicted_spread - opening_spread
+
+        # REVISED Trigger Logic
+        if abs(difference) > BET_THRESHOLD:
+            if predicted_spread > opening_spread:
+                bet_on = 'away'
+            elif predicted_spread < opening_spread:
+                bet_on = 'home'
+            # else: difference == 0, no bet
+
+        # Grade the bet if one was placed
+        if bet_on:
+            # REVISED: Actual margin from AWAY team perspective
+            actual_margin = game['away_points'] - game['home_points']
+
+            if bet_on == 'away':
+                if actual_margin > opening_spread: result, profit_loss = 'win', WIN_PAYOUT
+                elif actual_margin < opening_spread: result, profit_loss = 'loss', -LOSS_AMOUNT
+                else: result, profit_loss = 'push', 0
+            elif bet_on == 'home':
+                if actual_margin < opening_spread: result, profit_loss = 'win', WIN_PAYOUT
+                elif actual_margin > opening_spread: result, profit_loss = 'loss', -LOSS_AMOUNT
+                else: result, profit_loss = 'push', 0
+
+        results.append({
+            'game_id': game['id'],
+            'season': game['season'],
+            'predicted_spread_market': predicted_spread,
+            'opening_spread': opening_spread,
+            'bet_on': bet_on,
+            'result': result,
+            'profit_loss': profit_loss
+        })
+
+    return pd.DataFrame(results)
+
+# Create Evalucation Function
+
+def evaluate_feature_set_with_bets_nan(feature_set_name, features, xgb_params, num_round, X_train_fs_nan, y_train_fs, X_val_fs_nan, y_val_fs, val_df, val_required_cols):
+    """Trains XGBoost and evaluates on the validation set."""
+    print(f"\n--- Evaluating Feature Set: {feature_set_name} ({len(features)} features) ---")
+    start_time = time.time()
+
+    # Select features - using the PRE-IMPUTED data for this loop
+    X_train_subset = X_train_fs_nan[features]
+    X_val_subset = X_val_fs_nan[features]
+
+    # Prepare data for XGBoost
+    dtrain = xgb.DMatrix(X_train_subset, label=y_train_fs, enable_categorical=False)
+    dval = xgb.DMatrix(X_val_subset, label=y_val_fs, enable_categorical=False)
+
+    # Train the model
+    watchlist = [(dtrain, 'train'), (dval, 'eval')]
+    model = xgb.train(
+        xgb_params,
+        dtrain,
+        num_boost_round=num_round,
+        evals=watchlist,
+        verbose_eval=False, # Suppress verbose output during training
+        # early_stopping_rounds=10 # Optional: Stop early if validation RMSE doesn't improve
+    )
+
+    # Predict on validation set
+    y_pred_val = model.predict(dval)
+
+    # Calculate performance metrics
+    rmse = np.sqrt(mean_squared_error(y_val_fs, y_pred_val))
+    mae = mean_absolute_error(y_val_fs, y_pred_val)
+    # Calculate correlation using pandas Series for correct handling
+    predictions_series = pd.Series(y_pred_val, index=y_val_fs.index)
+    correlation = y_val_fs.corr(predictions_series)
+    bias = np.mean(y_pred_val - y_val_fs)
+
+    # --- Optional: Betting Simulation ---
+    betting_units = np.nan # Placeholder
+    betting_roi = np.nan
+    betting_win_rate = np.nan
+    # Uncomment and adapt if you have the simulator and necessary columns in val_df
+    try:
+      # Create a temporary df with predictions and necessary info for sim
+      sim_input_df = val_df[val_required_cols].copy()
+      sim_input_df['predicted_spread_market'] = y_pred_val
+      #Note: The simulator needs the ELO_SPREAD_DIVISOR and HFA from Elo tuning
+      #Pass them appropriately if needed by the simulator function
+      betting_results = simulate_betting(sim_input_df) # Need elo params
+      betting_units = betting_results['profit_loss'].sum()
+      total_bets = len(betting_results[betting_results['bet_on'].notna()])
+      total_wins = len(betting_results[betting_results['result'] == 'win'])
+      total_losses = len(betting_results[betting_results['result'] == 'loss'])
+      if (total_wins + total_losses) > 0:
+          betting_win_rate = total_wins / (total_wins + total_losses)
+      total_risked = (total_wins + total_losses)  # LOSS_AMOUNT=1
+      if total_risked > 0:
+          betting_roi = (betting_units / total_risked) * 100
+    except Exception as e:
+      print(f"Betting simulation failed for {feature_set_name}: {e}")
+    # ------------------------------------
+
+    end_time = time.time()
+    duration = end_time - start_time
+
+    results = {
+        'Set Name': feature_set_name,
+        'Num Features': len(features),
+        'RMSE': rmse,
+        'MAE': mae,
+        'Correlation': correlation,
+        'Bias': bias,
+        'Betting Units': betting_units, # Will be NaN if simulation skipped
+        'Betting Win Rate': betting_win_rate, # Will be NaN if simulation skipped
+        'Betting ROI': betting_roi, # Will be NaN if simulation skipped
+        'Eval Time (s)': duration
+    }
+
+    print(f"  RMSE: {rmse:.4f}, MAE: {mae:.4f}, Correlation: {correlation:.4f}, Bias: {bias:.4f}, Time: {duration:.1f}s")
+    # print(f"  Betting: Units={betting_units:.2f}, Win Rate={betting_win_rate:.2%}, ROI={betting_roi:.2f}%") # Uncomment if sim runs
+
+    return results
+
+# Run Feature Set Evaluation
+
+def run_feature_set_evaluation(candidate_feature_sets, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df):
+    all_results = []
+    for name, feature_list in candidate_feature_sets.items():
+        # Ensure feature list is not empty and features exist in X_train
+        valid_features = [f for f in feature_list if f in X_train.columns]
+        if not valid_features:
+            print(f"\n--- Skipping Feature Set: {name} (No valid features found) ---")
+            continue
+        if len(valid_features) < len(feature_list):
+            print(f"\nWarning: Some features for set '{name}' were not found in X_train after filtering.")
+
+        result = evaluate_feature_set_with_bets_nan(name, valid_features, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df)
+        all_results.append(result)
+    return all_results
+
+# Present Feature Set Evaluation Results
+def present_feature_set_evaluation_results(all_results):
+    print("\n--- Feature Set Evaluation Summary ---")
+    results_df = pd.DataFrame(all_results)
+    results_df.sort_values(by='RMSE', ascending=True, inplace=True) # Sort by primary metric (RMSE)
+
+    # Format columns for display
+    results_df['RMSE'] = results_df['RMSE'].map('{:.4f}'.format)
+    results_df['MAE'] = results_df['MAE'].map('{:.4f}'.format)
+    results_df['Correlation'] = results_df['Correlation'].map('{:.4f}'.format)
+    results_df['Bias'] = results_df['Bias'].map('{:.4f}'.format)
+    results_df['Betting Units'] = results_df['Betting Units'].map('{:.2f}'.format)
+    results_df['Betting Win Rate'] = results_df['Betting Win Rate'].map('{:.2%}'.format)
+    results_df['Betting ROI'] = results_df['Betting ROI'].map('{:.2f}%'.format)
+    results_df['Eval Time (s)'] = results_df['Eval Time (s)'].map('{:.1f}'.format)
+
+
+    print(results_df.to_string(index=False))
+    print("Evaluated candidate feature sets on the validation data.")
+    return results_df
+
+# Select Best Feature Set
+def select_best_feature_set(results_df, candidate_feature_sets, X_train, X_val):
+    best_feature_set_name = results_df.iloc[0]['Set Name'] # Assumes results_df sorted by best metric
+    best_features = candidate_feature_sets[best_feature_set_name]
+
+    print(f"Selected best feature set for tuning: '{best_feature_set_name}' ({len(best_features)} features)")
+
+    # Prepare final training and validation data with ONLY the selected features
+    # Using the temporarily imputed data from the previous step for consistency during tuning
+    X_train_best = X_train[best_features].copy()
+    X_val_best = X_val[best_features].copy()
+
+    print(f"Using feature shapes: X_train_best={X_train_best.shape}, X_val_best={X_val_best.shape}")
+    return best_features
+
+# Define Objective Function for Optuna
+def objective_xgb_nan(trial, X_train_hp_nan, y_train_hp, X_val_hp_nan, y_val_hp, validation_df_hp, val_required_cols, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD):
+    """Objective function for Optuna XGBoost hyperparameter tuning."""
+
+    # --- 3. Define Search Space ---
+    xgb_params = {
+        'objective': 'reg:squarederror',
+        'eval_metric': 'rmse',
+        'seed': 42,
+        'nthread': -1, # Use all cores
+        'device': 'cuda', # Enable GPU Acceleration
+        # Parameters to tune:
+        'eta': trial.suggest_float('eta', 0.01, 0.3, log=True),             # Learning rate
+        'max_depth': trial.suggest_int('max_depth', 3, 9),                  # Max tree depth
+        'subsample': trial.suggest_float('subsample', 0.5, 1.0),            # Row subsampling
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0), # Feature subsampling
+        'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),   # Min samples in leaf node
+        'gamma': trial.suggest_float('gamma', 0, 0.5),                      # Min loss reduction for split
+        'lambda': trial.suggest_float('lambda', 1e-8, 1.0, log=True),       # L2 regularization
+        'alpha': trial.suggest_float('alpha', 1e-8, 1.0, log=True),         # L1 regularization
+        # 'missing': np.nan # Enable if using non-imputed data
+    }
+
+    # Fixed number of boosting rounds for tuning (can be tuned itself later)
+    # Or use early stopping within the training call
+    num_boost_round_hp = 200 # Increase rounds for tuning?
+
+    # Prepare data
+    dtrain = xgb.DMatrix(X_train_hp_nan, label=y_train_hp)
+    dval = xgb.DMatrix(X_val_hp_nan, label=y_val_hp)
+    watchlist = [(dtrain, 'train'), (dval, 'eval')]
+
+    # Train model with suggested parameters
+    # Using early stopping is highly recommended during tuning
+    bst = xgb.train(
+        xgb_params,
+        dtrain,
+        num_boost_round=num_boost_round_hp,
+        evals=watchlist,
+        early_stopping_rounds=25, # Stop if validation RMSE doesn't improve for 25 rounds
+        verbose_eval=False # Keep quiet during Optuna trials
+    )
+
+    # Evaluate on validation set
+    y_pred_val_hp = bst.predict(dval, iteration_range=(0, bst.best_iteration)) # Use best iteration
+    rmse_val = np.sqrt(mean_squared_error(y_val_hp, y_pred_val_hp))
+
+    # --- Optional: Calculate betting simulation for this trial ---
+    # This adds significant time to each trial but directly optimizes for bets
+
+    run_betting_sim_in_tuning = False # Set to False to speed up tuning based only on RMSE
+
+    if run_betting_sim_in_tuning:
+        try:
+            sim_input_df_hp = validation_df_hp[val_required_cols].copy()
+            sim_input_df_hp['predicted_spread_market'] = pd.Series(y_pred_val_hp, index=validation_df_hp.index) # Align index
+            betting_results_hp = simulate_betting(sim_input_df_hp, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD)
+
+            if not betting_results_hp.empty:
+                betting_units_hp = betting_results_hp['profit_loss'].sum()
+                bets_placed_df_hp = betting_results_hp[betting_results_hp['bet_on'].notna()]
+                wins_hp = len(bets_placed_df_hp[bets_placed_df_hp['result'] == 'win'])
+                losses_hp = len(bets_placed_df_hp[bets_placed_df_hp['result'] == 'loss'])
+                if (wins_hp + losses_hp) > 0:
+                    total_risked_hp = (wins_hp + losses_hp) * LOSS_AMOUNT
+                    roi_hp = (betting_units_hp / total_risked_hp) * 100 if total_risked_hp > 0 else 0.0
+                else:
+                     roi_hp = 0.0 # Or NaN
+                 # Store ROI as user attribute to see it, but still optimize RMSE
+                trial.set_user_attr("val_roi", roi_hp)
+                trial.set_user_attr("val_units", betting_units_hp)
+            else:
+                 trial.set_user_attr("val_roi", np.nan)
+                 trial.set_user_attr("val_units", 0.0)
+
+        except Exception as e:
+             print(f"Warning: Betting sim failed in trial {trial.number}: {e}")
+             trial.set_user_attr("val_roi", np.nan)
+             trial.set_user_attr("val_units", np.nan)
+
+    # Return the metric to minimize (Validation RMSE)
+    return rmse_val
+
+# Run Optuna Study
+
+def run_optuna_study(X_train, X_val, y_train, y_val, val_df, best_features, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD):
+    N_TRIALS_HP = 100 # Number of hyperparameter combinations to test (adjust as needed)
+
+    print(f"\nStarting Optuna hyperparameter search ({N_TRIALS_HP} trials)...")
+    study_hp = optuna.create_study(direction='minimize', study_name='XGBoost Spread Prediction NaN') # Minimize RMSE
+
+    X_train_best_nan = X_train[best_features].copy()
+    X_val_best_nan = X_val[best_features].copy()
+
+    # Pass necessary dataframes via lambda function
+    study_hp.optimize(
+        lambda trial: objective_xgb_nan(trial, X_train_best_nan, y_train, X_val_best_nan, y_val, val_df, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD),
+        n_trials=N_TRIALS_HP,
+        show_progress_bar=True
+    )
+    print("\nOptimization Finished.")
+    print(f"Number of finished trials: {len(study_hp.trials)}")
+    print(f"Best trial (Validation RMSE): {study_hp.best_value:.4f}")
+    return study_hp
+
+# Identify Best Hyperparameters
+
+def identify_best_hyperparameters(study_hp):
+    print("Best hyperparameters:")
+    best_xgb_params = study_hp.best_params
+    for key, value in best_xgb_params.items():
+        print(f"  {key}: {value}")
+
+    # --- Optional: Show best trial's betting performance ---
+    best_trial_info = study_hp.best_trial
+    if 'val_roi' in best_trial_info.user_attrs:
+        print(f"\nBest Trial's Validation Betting Performance:")
+        print(f"  Units: {best_trial_info.user_attrs.get('val_units', 'N/A'):.2f}")
+        print(f"  ROI:   {best_trial_info.user_attrs.get('val_roi', 'N/A'):.2f}%")
+
+
+    # --- Retrain Final Model with Best Parameters (Optional here, usually done before Test Set) ---
+    # You would typically save these `best_xgb_params` and use them to train a final model
+    # on the *combined* training + validation data before predicting on the test set.
+    # For now, we have identified the best settings based on validation performance.
+
+    print("\n--- Phase 3 (Hyperparameter Tuning) Complete ---")
+    print("Identified best XGBoost hyperparameters based on validation set performance.")
+    print("Next Steps: Potentially adding more complex features (Opponent Adj, Returning Prod) OR final evaluation on the Test Set.")
+    return best_xgb_params
+
+# Define Train + Validation and Test Sets
+def define_train_val_test_sets(master_df, VALIDATION_END_SEASON, TEST_START_SEASON):
+
+    print(f"Using final split points:")
+    print(f"  Train+Validation: Seasons <= {VALIDATION_END_SEASON}")
+    print(f"  Test:             Seasons >= {TEST_START_SEASON}")
+
+    train_val_df = master_df[master_df['season'] <= VALIDATION_END_SEASON].copy()
+    test_df = master_df[master_df['season'] >= TEST_START_SEASON].copy()
+
+    print(f"\nData Shapes:")
+    print(f"  Train+Validation Set: {train_val_df.shape}")
+    print(f"  Test Set:             {test_df.shape}")
+
+    if test_df.empty:
+        print("\nERROR: Test set is empty. Cannot perform final evaluation.")
+        # Exit or handle appropriately
+    exit()
+    return train_val_df, test_df
+
+# Prepare Data for Final Model
+def prepare_data_for_final_model(train_val_df, test_df, best_features, target_variable):
+    # Select the best features identified earlier
+    X_train_val_nan = train_val_df[best_features].copy()
+    y_train_val = train_val_df[target_variable]
+
+    X_test_nan = test_df[best_features].copy()
+    y_test = test_df[target_variable]
+
+    print(f"\nFeature matrix shapes for final model:")
+    print(f"  X_train_val: {X_train_val_nan.shape}")
+    print(f"  X_test:      {X_test_nan.shape}")
+
+    # --- Handle Missing Values (Strategy Decision) ---
+    # IMPORTANT: Use the SAME strategy as during hyperparameter tuning.
+    # If XGBoost's internal NaN handling was used (recommended), do nothing here.
+    # If imputation was done (e.g., median), apply it here using values
+    # calculated ONLY from the original *training* set (train_df).
+
+    # Assuming XGBoost internal NaN handling (if tree_method='gpu_hist' was used):
+    print("\nAssuming XGBoost will handle NaNs internally (no imputation applied).")
+    # If you need to impute (e.g., using training median):
+    # features_with_nan_final = X_train_val.columns[X_train_val.isnull().any()].tolist()
+    # # Calculate median ONLY from original training data (train_df must exist)
+    # imputation_values_final = train_df[features_with_nan_final].median()
+    # print(f"Applying median imputation based on original training data to {len(features_with_nan_final)} columns...")
+    # X_train_val.fillna(imputation_values_final, inplace=True)
+    # X_test.fillna(imputation_values_final, inplace=True)
+    # print(f"NaN check after imputation (X_train_val): {X_train_val.isnull().sum().sum()}")
+    # print(f"NaN check after imputation (X_test):      {X_test.isnull().sum().sum()}")
+
+    # Prepare data for XGBoost
+    print("Preparing DMatrix for XGBoost...")
+    dtrain_val = xgb.DMatrix(X_train_val_nan, label=y_train_val)
+    dtest = xgb.DMatrix(X_test_nan, label=y_test)
+    return X_train_val_nan, y_train_val, X_test_nan, y_test, dtrain_val, dtest
+
+# Train Final XGBoost Model
+def train_final_model(best_xgb_params, best_features, dtrain_val, dtest):
+    # Combine base parameters with the best ones found by Optuna
+    final_xgb_params = {
+        'objective': 'reg:squarederror',
+        'eval_metric': 'rmse',
+        'seed': 42,
+        'nthread': -1,
+        # Add 'tree_method': 'gpu_hist' IF you are using a GPU runtime for this final training
+        'device': 'cuda'
+    }
+    final_xgb_params.update(best_xgb_params) # Add tuned parameters
+
+    # Determine the number of boosting rounds
+    # Option 1: Use a fixed number (e.g., the one used in tuning or slightly more)
+    # num_boost_round_final = 200 # Example
+    # Option 2: If you logged bst.best_iteration from the best Optuna trial, use that.
+    # best_iteration = ??? # Need to retrieve this value from tuning results if possible
+    # Option 3: Train with early stopping against a small validation split *of the train_val_df*
+    # This is safer but adds complexity. Let's use a fixed number for now.
+    num_boost_round_final = 200 # Use the value determined during tuning or a reasonable default
+    print(f"Training final XGBoost model with {len(best_features)} features for {num_boost_round_final} rounds...")
+    print("Using hyperparameters:", final_xgb_params)
+
+    start_train_time = time.time()
+    final_model = xgb.train(
+        final_xgb_params,
+        dtrain_val,
+        num_boost_round=num_boost_round_final,
+        evals=[(dtrain_val, 'train'), (dtest, 'test')], # Monitor performance on test set during training
+        verbose_eval=50 # Print progress every 50 rounds
+    )
+    end_train_time = time.time()
+    print(f"Final model training finished in {end_train_time - start_train_time:.2f} seconds.")
+    return final_model
+
+# Predict on the Test Set
+def predict_test_set(final_model, dtest, y_test):
+    print("\nPredicting on Test Set...")
+    y_pred_test = final_model.predict(dtest)
+    predictions_test_series = pd.Series(y_pred_test, index=y_test.index)
+    return predictions_test_series, y_pred_test
+
+# Evaluate Statistical Metrics on Test Set
+def evaluate_model_statistics(y_test, y_pred_test, predictions_test_series, test_df, val_required_cols):
+    print("\n--- Test Set Statistical Performance ---")
+
+    rmse_test = np.sqrt(mean_squared_error(y_test, y_pred_test))
+    mae_test = mean_absolute_error(y_test, y_pred_test)
+    correlation_test = y_test.corr(predictions_test_series)
+    bias_test = np.mean(y_pred_test - y_test)
+    r2_test = r2_score(y_test, y_pred_test) # R-squared
+
+    print(f"  RMSE:        {rmse_test:.4f}")
+    print(f"  MAE:         {mae_test:.4f}")
+    print(f"  Correlation: {correlation_test:.4f}")
+    print(f"  Bias:        {bias_test:.4f}")
+    print(f"  R-squared:   {r2_test:.4f}")
+    plt.figure(figsize=(8, 8))
+    sns.scatterplot(x=y_test, y=y_pred_test, alpha=0.5)
+    plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], '--r', linewidth=2, label='Ideal Fit')
+    plt.xlabel("Actual Closing Spread (y_test)")
+    plt.ylabel("Predicted Closing Spread (y_pred_test)")
+    plt.title(f"Test Set: Actual vs. Predicted Spread (Corr: {correlation_test:.3f})")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+    # Evaluate Betting Performance
+    print("\n--- Test Set Betting Performance ---")
+
+    # Prepare input for the simulator
+    # Select necessary columns from the original test_df
+    sim_input_test_df = test_df[val_required_cols].copy()
+    # Add the predictions, ensuring index alignment
+    sim_input_test_df['predicted_spread_market'] = predictions_test_series
+
+    # Run the simulation
+    test_betting_results = simulate_betting(sim_input_test_df)
+
+    if test_betting_results.empty:
+        print("No bets were placed on the test set according to the strategy.")
+    else:
+        # Aggregate results
+        test_total_units = test_betting_results['profit_loss'].sum()
+        test_bets_placed_df = test_betting_results[test_betting_results['bet_on'].notna()]
+        test_total_bets = len(test_bets_placed_df)
+        test_wins = len(test_bets_placed_df[test_bets_placed_df['result'] == 'win'])
+        test_losses = len(test_bets_placed_df[test_bets_placed_df['result'] == 'loss'])
+        test_pushes = len(test_bets_placed_df[test_bets_placed_df['result'] == 'push'])
+
+        test_win_rate = test_wins / (test_wins + test_losses) if (test_wins + test_losses) > 0 else np.nan
+        test_total_risked = (test_wins + test_losses) * LOSS_AMOUNT
+        test_roi = (test_total_units / test_total_risked) * 100 if test_total_risked > 0 else 0.0
+
+        print(f"  Total Bets:   {test_total_bets}")
+        print(f"  Wins:         {test_wins}")
+        print(f"  Losses:       {test_losses}")
+        print(f"  Pushes:       {test_pushes}")
+        print(f"  Win Rate:     {test_win_rate:.2%}")
+        print(f"  Total Units:  {test_total_units:+.2f}")
+        print(f"  ROI:          {test_roi:.2f}%")
+    # Optional: Plot cumulative units over time for the test set
+    test_betting_results = pd.merge(test_betting_results[['game_id', 'profit_loss']],
+                                    test_df[['id', 'season', 'week']],
+                                    left_on='game_id', right_on='id')
+    test_betting_results['game_date_order'] = test_betting_results['season'] * 100 + test_betting_results['week']
+    test_betting_results.sort_values('game_date_order', inplace=True)
+    test_betting_results['cumulative_units'] = test_betting_results['profit_loss'].cumsum()
+
+    plt.figure(figsize=(12, 6))
+    test_betting_results['cumulative_units'].plot()
+    plt.title('Test Set Cumulative Units Over Time')
+    plt.xlabel('Games (Chronological Order)')
+    plt.ylabel('Cumulative Units')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
