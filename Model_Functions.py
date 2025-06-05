@@ -952,7 +952,7 @@ def simulate_betting(simulation_input_df, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD
 
 # Create Evalucation Function
 
-def evaluate_feature_set_with_bets_nan(feature_set_name, features, xgb_params, num_round, X_train_fs_nan, y_train_fs, X_val_fs_nan, y_val_fs, val_df, val_required_cols):
+def evaluate_feature_set_with_bets_nan(feature_set_name, features, xgb_params, num_round, X_train_fs_nan, y_train_fs, X_val_fs_nan, y_val_fs, val_df, val_required_cols, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD):
     """Trains XGBoost and evaluates on the validation set."""
     print(f"\n--- Evaluating Feature Set: {feature_set_name} ({len(features)} features) ---")
     start_time = time.time()
@@ -998,7 +998,7 @@ def evaluate_feature_set_with_bets_nan(feature_set_name, features, xgb_params, n
       sim_input_df['predicted_spread_market'] = y_pred_val
       #Note: The simulator needs the ELO_SPREAD_DIVISOR and HFA from Elo tuning
       #Pass them appropriately if needed by the simulator function
-      betting_results = simulate_betting(sim_input_df) # Need elo params
+      betting_results = simulate_betting(sim_input_df, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD) # Need elo params
       betting_units = betting_results['profit_loss'].sum()
       total_bets = len(betting_results[betting_results['bet_on'].notna()])
       total_wins = len(betting_results[betting_results['result'] == 'win'])
@@ -1035,7 +1035,7 @@ def evaluate_feature_set_with_bets_nan(feature_set_name, features, xgb_params, n
 
 # Run Feature Set Evaluation
 
-def run_feature_set_evaluation(candidate_feature_sets, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df):
+def run_feature_set_evaluation(candidate_feature_sets, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df, val_required_cols):
     all_results = []
     for name, feature_list in candidate_feature_sets.items():
         # Ensure feature list is not empty and features exist in X_train
@@ -1046,7 +1046,7 @@ def run_feature_set_evaluation(candidate_feature_sets, xgb_params, num_boost_rou
         if len(valid_features) < len(feature_list):
             print(f"\nWarning: Some features for set '{name}' were not found in X_train after filtering.")
 
-        result = evaluate_feature_set_with_bets_nan(name, valid_features, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df)
+        result = evaluate_feature_set_with_bets_nan(name, valid_features, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df, val_required_cols)
         all_results.append(result)
     return all_results
 
@@ -1171,7 +1171,7 @@ def objective_xgb_nan(trial, X_train_hp_nan, y_train_hp, X_val_hp_nan, y_val_hp,
 
 # Run Optuna Study
 
-def run_optuna_study(X_train, X_val, y_train, y_val, val_df, best_features, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD):
+def run_optuna_study(X_train, X_val, y_train, y_val, val_df, best_features, val_required_cols, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD):
     N_TRIALS_HP = 100 # Number of hyperparameter combinations to test (adjust as needed)
 
     print(f"\nStarting Optuna hyperparameter search ({N_TRIALS_HP} trials)...")
@@ -1182,7 +1182,7 @@ def run_optuna_study(X_train, X_val, y_train, y_val, val_df, best_features, WIN_
 
     # Pass necessary dataframes via lambda function
     study_hp.optimize(
-        lambda trial: objective_xgb_nan(trial, X_train_best_nan, y_train, X_val_best_nan, y_val, val_df, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD),
+        lambda trial: objective_xgb_nan(trial, X_train_best_nan, y_train, X_val_best_nan, y_val, val_df, val_required_cols, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD),
         n_trials=N_TRIALS_HP,
         show_progress_bar=True
     )
@@ -1234,7 +1234,7 @@ def define_train_val_test_sets(master_df, VALIDATION_END_SEASON, TEST_START_SEAS
     if test_df.empty:
         print("\nERROR: Test set is empty. Cannot perform final evaluation.")
         # Exit or handle appropriately
-    exit()
+        exit()
     return train_val_df, test_df
 
 # Prepare Data for Final Model
@@ -1318,7 +1318,7 @@ def predict_test_set(final_model, dtest, y_test):
     return predictions_test_series, y_pred_test
 
 # Evaluate Statistical Metrics on Test Set
-def evaluate_model_statistics(y_test, y_pred_test, predictions_test_series, test_df, val_required_cols, LOSS_AMOUNT):
+def evaluate_model_statistics(y_test, y_pred_test, predictions_test_series, test_df, val_required_cols, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD):
     print("\n--- Test Set Statistical Performance ---")
 
     rmse_test = np.sqrt(mean_squared_error(y_test, y_pred_test))
@@ -1353,7 +1353,7 @@ def evaluate_model_statistics(y_test, y_pred_test, predictions_test_series, test
     sim_input_test_df['predicted_spread_market'] = predictions_test_series
 
     # Run the simulation
-    test_betting_results = simulate_betting(sim_input_test_df)
+    test_betting_results = simulate_betting(sim_input_test_df, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD)
 
     if test_betting_results.empty:
         print("No bets were placed on the test set according to the strategy.")
@@ -1393,3 +1393,4 @@ def evaluate_model_statistics(y_test, y_pred_test, predictions_test_series, test
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+    return test_win_rate

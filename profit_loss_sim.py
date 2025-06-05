@@ -128,8 +128,6 @@ if __name__ == "__main__":
     # --- !!! Replace with your actual best_params from Optuna !!! ---
     study = joblib.load("elo_tuning_study.pkl")
     best_params = {**study.best_params, **{ # Add back the fixed params
-        'INITIAL_ELO_FBS': 1500, 'INITIAL_ELO_FCS': 1200,
-        'MEAN_REGRESSION_TARGET_FBS': 1500, 'MEAN_REGRESSION_TARGET_FCS': 1200,
         'RP_METRIC': 'usage', 'DEFAULT_RP': 0.5,
         'ELO_SCALING_FACTOR': 400.0, 'ELO_EXP_BASE': 10.0
     }}

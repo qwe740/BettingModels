@@ -4,25 +4,25 @@ import numpy as np
 import math
 
 # --- Configuration Parameters (Tunable) ---
-INITIAL_ELO_FBS = 1500
-INITIAL_ELO_FCS = 1200
-HFA = -101.1125  # Home Field Advantage in Elo points (common value, needs tuning)
-K_FACTOR = 37.5499 # Elo K-factor (controls update magnitude)
-MEAN_REGRESSION_TARGET_FBS = 1500
-MEAN_REGRESSION_TARGET_FCS = 1200
+INITIAL_ELO_FBS = 1790
+INITIAL_ELO_FCS = 1380
+HFA = -146.4995  # Home Field Advantage in Elo points (common value, needs tuning)
+K_FACTOR = 56.3956 # Elo K-factor (controls update magnitude)
+MEAN_REGRESSION_TARGET_FBS = 1660
+MEAN_REGRESSION_TARGET_FCS = 1300
 # % of previous season's rating gap (vs mean) to keep. 0 = full reset, 1 = no regression
-SEASON_REGRESSION_BASE = 0.8412
+SEASON_REGRESSION_BASE = 0.84
 # How much returning production % influences the regression factor.
 # E.g., RP_FACTOR=0.4 means a team with 100% RP keeps an extra 40% of its rating gap,
 # a team with 50% RP keeps an extra 20%, 0% RP keeps 0% extra.
-RETURNING_PROD_FACTOR = 0.9175
+RETURNING_PROD_FACTOR = 0.4898
 # Use 'percentPPA' or 'usage' from returning_production? Let's start with usage.
 RP_METRIC = 'usage'
 # Fallback RP value if missing for a team (treat as average)
 DEFAULT_RP = 0.5
 #MOV scalars for tuning
-MOV_DENOMINATOR_BASE = 6.7432 # Part of the MoV multiplier calculation
-MOV_ELO_DIFF_SENSITIVITY = 0.0025 # Part of the MoV multiplier calculation (adjusts effect based on elo diff)
+MOV_DENOMINATOR_BASE = 6.8897 # Part of the MoV multiplier calculation
+MOV_ELO_DIFF_SENSITIVITY = 0.002 # Part of the MoV multiplier calculation (adjusts effect based on elo diff)
 # Fundamental Constants for ELO Models
 ELO_SCALING_FACTOR = 400.0 # Standard Elo scaling factor
 ELO_EXP_BASE = 10.0        # Standard Elo exponent base

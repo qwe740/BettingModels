@@ -75,8 +75,9 @@ def run_elo_calculation(games_df, rp_df, params):
             new_ratings = {}
             teams_processed = set()
             for team, current_rating in elo_ratings.items():
-                 # Rough FBS/FCS check (can be improved)
-                 is_fbs = get_regression_target(True) < current_rating + (INITIAL_ELO_FBS - INITIAL_ELO_FCS)/2
+                 # Improved FBS/FCS check using the midpoint between targets
+                 midpoint = (MEAN_REGRESSION_TARGET_FBS + MEAN_REGRESSION_TARGET_FCS) / 2
+                 is_fbs = current_rating > midpoint
                  target_rating = get_regression_target(is_fbs)
                  try:
                      rp_value = rp_df.loc[(season, team), RP_METRIC]
@@ -94,7 +95,8 @@ def run_elo_calculation(games_df, rp_df, params):
             # Apply default regression to any missed teams
             for team, rating in elo_ratings.items():
                 if team not in teams_processed:
-                     is_fbs = get_regression_target(True) < rating + (INITIAL_ELO_FBS - INITIAL_ELO_FCS)/2
+                     midpoint = (MEAN_REGRESSION_TARGET_FBS + MEAN_REGRESSION_TARGET_FCS) / 2
+                     is_fbs = rating > midpoint
                      target_rating = get_regression_target(is_fbs)
                      new_ratings[team] = target_rating + SEASON_REGRESSION_BASE * (rating - target_rating)
 
@@ -142,11 +144,29 @@ def objective(trial, games_df_static, rp_df_static):
     """Objective function for Optuna to minimize."""
 
     # --- Define Search Space for Parameters ---
+    
+    # First, suggest the initial ELO values and regression targets
+    # These should be constrained to reasonable ranges while maintaining FBS > FCS
+    INITIAL_ELO_FCS = trial.suggest_float('INITIAL_ELO_FCS', 1000, 1400)
+    INITIAL_ELO_FBS = trial.suggest_float('INITIAL_ELO_FBS', INITIAL_ELO_FCS + 100, 1800)
+    
+    # Regression targets - should be close to initial values but can vary
+    MEAN_REGRESSION_TARGET_FCS = trial.suggest_float('MEAN_REGRESSION_TARGET_FCS', 1000, 1400)
+    MEAN_REGRESSION_TARGET_FBS = trial.suggest_float('MEAN_REGRESSION_TARGET_FBS', MEAN_REGRESSION_TARGET_FCS + 100, 1800)
+    
     params = {
+        # Initial ELO values (now optimized)
+        'INITIAL_ELO_FBS': INITIAL_ELO_FBS,
+        'INITIAL_ELO_FCS': INITIAL_ELO_FCS,
+        
+        # Regression targets (now optimized)
+        'MEAN_REGRESSION_TARGET_FBS': MEAN_REGRESSION_TARGET_FBS,
+        'MEAN_REGRESSION_TARGET_FCS': MEAN_REGRESSION_TARGET_FCS,
+        
         # Core Elo Params
         'HFA': trial.suggest_float('HFA', -200.0, 200.0),
         'K_FACTOR': trial.suggest_float('K_FACTOR', 1.0, 100.0),
-        'ELO_SPREAD_DIVISOR': trial.suggest_float('ELO_SPREAD_DIVISOR', 1.0, 100.0), # Key new param!
+        'ELO_SPREAD_DIVISOR': trial.suggest_float('ELO_SPREAD_DIVISOR', 1.0, 100.0),
 
         # Regression Params
         'SEASON_REGRESSION_BASE': trial.suggest_float('SEASON_REGRESSION_BASE', 0.1, 0.9),
@@ -158,10 +178,6 @@ def objective(trial, games_df_static, rp_df_static):
         'MOV_ELO_DIFF_SENSITIVITY': trial.suggest_float('MOV_ELO_DIFF_SENSITIVITY', 0.0001, 0.01),
 
         # Fixed/Less Critical Params (Keep fixed initially)
-        'INITIAL_ELO_FBS': 1500,
-        'INITIAL_ELO_FCS': 1200,
-        'MEAN_REGRESSION_TARGET_FBS': 1500,
-        'MEAN_REGRESSION_TARGET_FCS': 1200,
         'RP_METRIC': 'usage', # Or 'percentPPA'
         'ELO_SCALING_FACTOR': 400.0,
         'ELO_EXP_BASE': 10.0,
@@ -214,8 +230,9 @@ if __name__ == "__main__":
     study = optuna.create_study(direction='minimize')
 
     # Run optimization
-    # n_trials: Start with ~50-100, increase if needed. More trials = longer runtime.
-    N_TRIALS = 1000
+    # n_trials: Increase since we're optimizing more parameters
+    # More parameters = larger search space = need more trials
+    N_TRIALS = 200  # Increased from 100 due to expanded parameter space
     study.optimize(lambda trial: objective(trial, games_df_static, rp_df_static),
                    n_trials=N_TRIALS,
                    show_progress_bar=True) # Requires tqdm installed
@@ -232,8 +249,6 @@ if __name__ == "__main__":
     # --- Re-run with Best Params for Detailed Evaluation (Optional) ---
     print("\nEvaluating best parameters...")
     best_params = {**study.best_params, **{ # Add back the fixed params
-        'INITIAL_ELO_FBS': 1500, 'INITIAL_ELO_FCS': 1200,
-        'MEAN_REGRESSION_TARGET_FBS': 1500, 'MEAN_REGRESSION_TARGET_FCS': 1200,
         'RP_METRIC': 'usage', 'DEFAULT_RP': 0.5,
         'ELO_SCALING_FACTOR': 400.0, 'ELO_EXP_BASE': 10.0
     }}
