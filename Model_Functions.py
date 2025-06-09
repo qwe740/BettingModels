@@ -15,20 +15,6 @@ import math
 from tqdm import tqdm
 import optuna
 
-
-# Mount with Colab
-def mount_with_colab():
-    from google.colab import drive
-    drive.mount('/content/drive')
-    # Define the path to your desired directory in Google Drive
-    drive_path = '/content/drive/MyDrive/Betting/BettingModels'
-
-    # Change the current working directory to the desired location
-    os.chdir(drive_path)
-
-    # Verify the current working directory (optional)
-    print(f"Current working directory: {os.getcwd()}")
-
 # Load Games Full Data
 def load_games_data(DB_PATH):
     print(f"Connecting to database: {DB_PATH}")
