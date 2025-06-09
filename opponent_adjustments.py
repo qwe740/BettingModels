@@ -209,14 +209,14 @@ def get_opponent_adjustments(master_df):
     # Calculate Lagged Expanding Team Averages
     print("\nCalculating lagged expanding team averages...")
     # Create the team-centric view again
-    home_view = df[['id', 'season', 'week', 'home_team', 'away_team'] + home_offense_cols + home_defense_cols].copy()
-    away_view = df[['id', 'season', 'week', 'away_team', 'home_team'] + away_offense_cols + away_defense_cols].copy()
+    home_view = df[['id', 'season', 'week', 'homeTeam', 'awayTeam'] + home_offense_cols + home_defense_cols].copy()
+    away_view = df[['id', 'season', 'week', 'awayTeam', 'homeTeam'] + away_offense_cols + away_defense_cols].copy()
     # ... (rest of team_centric_df creation and column renaming is identical to previous version) ...
-    home_view.rename(columns={'home_team': 'team', 'away_team': 'opponent'}, inplace=True)
+    home_view.rename(columns={'homeTeam': 'team', 'awayTeam': 'opponent'}, inplace=True)
     home_view.columns = [col.replace('home_offense_', 'offense_') for col in home_view.columns]
     home_view.columns = [col.replace('home_defense_', 'defense_') for col in home_view.columns]
     home_view['is_home'] = 1
-    away_view.rename(columns={'away_team': 'team', 'home_team': 'opponent'}, inplace=True)
+    away_view.rename(columns={'awayTeam': 'team', 'homeTeam': 'opponent'}, inplace=True)
     away_view.columns = [col.replace('away_offense_', 'offense_') for col in away_view.columns]
     away_view.columns = [col.replace('away_defense_', 'defense_') for col in away_view.columns]
     away_view['is_home'] = 0
@@ -271,7 +271,7 @@ def get_opponent_adjustments(master_df):
     df = pd.merge(
         df,
         home_avg_slice,
-        left_on=['id', 'season', 'week', 'home_team'],
+        left_on=['id', 'season', 'week', 'homeTeam'],
         right_on=['id', 'season', 'week', 'team'],
         how='left'
     )
@@ -288,7 +288,7 @@ def get_opponent_adjustments(master_df):
     df = pd.merge(
         df,
         away_avg_slice,
-        left_on=['id', 'season', 'week', 'away_team'],
+        left_on=['id', 'season', 'week', 'awayTeam'],
         right_on=['id', 'season', 'week', 'team'],
         how='left'
     )

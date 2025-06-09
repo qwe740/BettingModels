@@ -14,12 +14,21 @@ def get_data(endpoint, base_url, api_key, params={}):
 # Initial Pull Games Data
 def pull_initial_games_data(base_url, api_key):
     games_data = []
-    for year in range(2013, 2025):
+    for year in range(2013, 2026): # Extended range to include 2025
         print(f"Pulling games for {year}...")
-        data = get_data("games", base_url, api_key, {"year": year, "division": "fbs"})
+        data = get_data("games", base_url, api_key, {"year": year, "classification": "fbs"})
         games_data.extend(data)
     games_df = pd.DataFrame(games_data)
-    games_df = games_df.drop(['home_line_scores','away_line_scores'], axis=1)
+    cols_to_remove = ['homeLineScores', 'awayLineScores']
+
+    # Find which of these columns actually exist in the DataFrame.
+    # This prevents a KeyError if a column is missing entirely.
+    cols_that_exist = [col for col in cols_to_remove if col in games_df.columns]
+    
+    # Drop the columns that were found.
+    if cols_that_exist:
+        games_df = games_df.drop(columns=cols_that_exist)
+    # Use errors='ignore' to prevent KeyError for future games that don't have line scores
     return games_df
 
 # Setup SQLite Database
@@ -31,9 +40,11 @@ def setup_sqlite_database(games_df, db_path):
 # Pull Lines Data
 def pull_lines_data(base_url, api_key):
     lines_data = []
-    for year in range(2013, 2025):
+    # Extended range to include 2025
+    for year in range(2013, 2026):
         print(f"Pulling lines for {year}...")
-        data = get_data("lines", {"year": year, "division": "fbs"})
+        # Fixed the call to get_data to include base_url and api_key
+        data = get_data("lines", base_url, api_key, {"year": year, "division": "fbs"})
         lines_data.extend(data)
 
     # Flatten the nested structure
@@ -82,8 +93,8 @@ def average_betting_data(db_path):
     LEFT JOIN
         lines l ON g.id = l.game_id
     GROUP BY
-        g.id, g.season, g.week, g.start_date, g.home_team, g.home_points,
-        g.away_team, g.away_points
+        g.id, g.season, g.week, g.startDate, g.homeTeam, g.homePoints,
+        g.awayTeam, g.awayPoints
     """
 
     # Load into DataFrame
@@ -101,7 +112,7 @@ def average_betting_data(db_path):
 # Pull Advanced Stat Data
 def pull_advanced_stats_data(base_url, api_key):
     advanced_stats_data = []
-    for year in range(2013, 2025):
+    for year in range(2013, 2026): # Extended range to include 2025
         print(f"Pulling advanced stats for {year}...")
         data = get_data("stats/game/advanced", base_url, api_key, {"year": year, "excludeGarbageTime":"true", "division": "fbs"})
         advanced_stats_data.extend(data)
@@ -264,9 +275,9 @@ def merge_games_and_advanced_stats(db_path):
     FROM
         games g
     LEFT JOIN
-        advanced_stats h ON g.id = h.gameId AND g.home_team = h.team
+        advanced_stats h ON g.id = h.gameId AND g.homeTeam = h.team
     LEFT JOIN
-        advanced_stats a ON g.id = a.gameId AND g.away_team = a.team
+        advanced_stats a ON g.id = a.gameId AND g.awayTeam = a.team
     """
 
     # Load into DataFrame
@@ -292,8 +303,8 @@ def time_to_seconds(time_str):
 # PUll Games/Teams Data (Turnovers and PossessionTime Only)
 def pull_games_teams_data(base_url, api_key):
     games_teams_data = []
-    for year in range(2013, 2025):
-        for week in range(1, 17):  # Weeks 1-15
+    for year in range(2013, 2026): # Extended range to include 2025
+        for week in range(1, 17):  # Weeks 1-16
             print(f"Pulling games/teams for {year}, Week {week}...")
             data = get_data("games/teams", base_url, api_key, {"year": year, "week": week, "division": "fbs"})
             games_teams_data.extend(data)
@@ -360,9 +371,10 @@ def merge_games_teams_data(db_path):
 # Pull returning production data
 def pull_returning_production_data(base_url, api_key):
     returning_data = []
-    for year in range(2014, 2025):  # 2014-2024 seasons
+    for year in range(2014, 2026):  # Extended range to include 2025 season
         print(f"Pulling returning production for {year}...")
-        data = get_data("player/returning", {"year": year})
+        # Fixed the call to get_data to include base_url and api_key
+        data = get_data("player/returning", base_url, api_key, {"year": year})
         returning_data.extend(data)
 
     # Create DataFrame

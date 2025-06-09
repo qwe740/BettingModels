@@ -39,12 +39,12 @@ def load_games_data(DB_PATH):
     # Make sure this list matches the columns in your 'games_full' table
     # (Derived from your initial dataset_head.csv)
     all_feature_columns = [
-        'id', 'season', 'week', 'season_type', 'completed', 'neutral_site',
-        'conference_game', 'attendance', 'home_team', 'home_conference',
-        'home_division', 'home_points', 'home_post_win_prob', 'home_pregame_elo', # Note: We use our CALC'd elo later
-        'home_postgame_elo', 'away_team', 'away_conference', 'away_division',
-        'away_points', 'away_post_win_prob', 'away_pregame_elo', # Note: We use our CALC'd elo later
-        'away_postgame_elo', 'avg_closing_spread', 'avg_closing_total',
+        'id', 'season', 'week', 'seasonType', 'completed', 'neutralSite',
+        'conferenceGame', 'attendance', 'homeTeam', 'homeConference',
+        'homeClassification', 'homePoints', 'homePostgameWinProbability', 'homePregameElo', # Note: We use our CALC'd elo later
+        'homePostgameElo', 'awayTeam', 'awayConference', 'awayClassification',
+        'awayPoints', 'awayPostgameWinProbability', 'awayPregameElo', # Note: We use our CALC'd elo later
+        'awayPostgameElo', 'avg_closing_spread', 'avg_closing_total',
         'avg_opening_spread', 'avg_opening_total',
         # Home Offense Stats
         'home_offense_plays', 'home_offense_drives', 'home_offense_ppa',
@@ -142,16 +142,16 @@ def load_returning_prod_data(DB_PATH, RP_METRICS_TO_USE):
 # Pre-process Games Data
 def preprocess_games_data(games_df):
     # Convert boolean-like columns to integers (0 or 1) for models
-    games_df['neutral_site'] = games_df['neutral_site'].astype(int)
-    games_df['conference_game'] = games_df['conference_game'].astype(int)
+    games_df['neutralSite'] = games_df['neutralSite'].astype(int)
+    games_df['conferenceGame'] = games_df['conferenceGame'].astype(int)
 
     # Convert spread/total/score columns to numeric, coercing errors to NaN
     numeric_cols = ['avg_closing_spread', 'avg_closing_total', 'avg_opening_spread',
-                    'avg_opening_total', 'home_points', 'away_points',
+                    'avg_opening_total', 'homePoints', 'awayPoints',
                     'attendance', 'home_possessionTime', 'away_possessionTime',
                     # Add Elo/win prob if needed, though we'll use our own Elo primarily
-                    'home_post_win_prob', 'home_pregame_elo', 'home_postgame_elo',
-                    'away_post_win_prob', 'away_pregame_elo', 'away_postgame_elo']
+                    'homePostgameWinProbability', 'homePregameElo', 'homePostgameElo',
+                    'awayPostgameWinProbability', 'awayPregameElo', 'awayPostgameElo']
 
     # Convert all advanced stat columns to numeric
     # Identify the first advanced stat column to loop from there
@@ -167,7 +167,7 @@ def preprocess_games_data(games_df):
             games_df[col] = pd.to_numeric(games_df[col], errors='coerce')
 
     # Report missing values for key targets/inputs after conversion
-    check_missing_cols = ['avg_closing_spread', 'home_points', 'away_points']
+    check_missing_cols = ['avg_closing_spread', 'homePoints', 'awayPoints']
     print("Missing value check (post-numeric conversion):")
     for col in check_missing_cols:
         if col in games_df.columns:
@@ -175,7 +175,7 @@ def preprocess_games_data(games_df):
             print(f"  Column '{col}' missing: {missing_pct:.2f}%")
 
     # Drop rows where essential score data might be missing after conversion
-    games_df.dropna(subset=['home_points', 'away_points'], inplace=True)
+    games_df.dropna(subset=['homePoints', 'awayPoints'], inplace=True)
     return games_df
 
 # Preprocess Returning Production Data
@@ -233,7 +233,7 @@ def merge_returning_production_to_games(master_df, rp_df, RP_METRICS_TO_USE, DEF
     master_df = pd.merge(
         master_df,
         rp_df,
-        left_on=['season', 'home_team'],
+        left_on=['season', 'homeTeam'],
         right_on=['rp_season', 'team'],
         how='left',
         suffixes=('', '_rp_home_temp')
@@ -247,7 +247,7 @@ def merge_returning_production_to_games(master_df, rp_df, RP_METRICS_TO_USE, DEF
     master_df = pd.merge(
         master_df,
         rp_df,
-        left_on=['season', 'away_team'],
+        left_on=['season', 'awayTeam'],
         right_on=['rp_season', 'team'],
         how='left',
         suffixes=('', '_rp_away_temp')
@@ -270,7 +270,7 @@ def merge_returning_production_to_games(master_df, rp_df, RP_METRICS_TO_USE, DEF
 # Add Opponent Adjustments and Merge
 def add_opponent_adjustments(master_df):    
     opponent_adjustment_df = get_opponent_adjustments(master_df)
-    master_df = pd.merge(master_df, opponent_adjustment_df, on=['season', 'week', 'home_team', 'away_team'], how='left', suffixes=("","_y"))
+    master_df = pd.merge(master_df, opponent_adjustment_df, on=['season', 'week', 'homeTeam', 'awayTeam'], how='left', suffixes=("","_y"))
     cols_to_drop = [col for col in master_df.columns if col.endswith('_y')]
     if cols_to_drop:
         print(f"Dropping potentially duplicated columns: {cols_to_drop}")
@@ -380,11 +380,11 @@ def identify_stats_to_roll(ewma_span):
 # Reshape data to team-centric format
 def reshape_to_team_centric(master_df, stats_to_roll):
     # Create two temporary dataframes, one for home team stats, one for away
-    home_stats = master_df[['id', 'season', 'week', 'home_team', 'away_team']].copy()
-    away_stats = master_df[['id', 'season', 'week', 'away_team', 'home_team']].copy()
+    home_stats = master_df[['id', 'season', 'week', 'homeTeam', 'awayTeam']].copy()
+    away_stats = master_df[['id', 'season', 'week', 'awayTeam', 'homeTeam']].copy()
 
-    home_stats.rename(columns={'home_team': 'team', 'away_team': 'opponent'}, inplace=True)
-    away_stats.rename(columns={'away_team': 'team', 'home_team': 'opponent'}, inplace=True)
+    home_stats.rename(columns={'homeTeam': 'team', 'awayTeam': 'opponent'}, inplace=True)
+    away_stats.rename(columns={'awayTeam': 'team', 'homeTeam': 'opponent'}, inplace=True)
 
     # Add actual stats, renaming columns to generic 'offense_*', 'defense_*'
     print("Reshaping data to team-centric format...")
@@ -447,7 +447,7 @@ def merge_ewma_to_master_df(master_df, team_game_df, ewma_cols_generated):
     master_df_merged = pd.merge(
         master_df,
         ewma_features_to_merge,
-        left_on=['id', 'home_team'],
+        left_on=['id', 'homeTeam'],
         right_on=['id', 'team'],
         how='left',
         suffixes=('', '_y') # Avoid suffix collision initially
@@ -461,7 +461,7 @@ def merge_ewma_to_master_df(master_df, team_game_df, ewma_cols_generated):
     master_df_final = pd.merge(
         master_df_merged,
         ewma_features_to_merge,
-        left_on=['id', 'away_team'],
+        left_on=['id', 'awayTeam'],
         right_on=['id', 'team'],
         how='left',
         suffixes=('', '_y') # Avoid suffix collision
@@ -578,12 +578,12 @@ def drop_fcs_games(master_df):
     print("\n--- Filtering Out Games Against FCS Opponents ---")
 
     # Assuming 'away_division' column exists and indicates 'fcs'
-    if 'away_division' in master_df.columns:
+    if 'awayClassification' in master_df.columns:
         initial_rows = len(master_df)
-        fcs_games_count = (master_df['away_division'] == 'fcs').sum()
+        fcs_games_count = (master_df['awayClassification'] == 'fcs').sum()
 
         if fcs_games_count > 0:
-            master_df = master_df[master_df['away_division'] != 'fcs'].copy()
+            master_df = master_df[master_df['awayClassification'] != 'fcs'].copy()
             rows_dropped = initial_rows - len(master_df)
             print(f"Dropped {rows_dropped} games where away_team division is 'fcs'.")
             print(f"Remaining rows in master_df: {len(master_df)}")
@@ -596,7 +596,7 @@ def drop_fcs_games(master_df):
         # You would need a list of known FCS conferences
         fcs_conferences = ['Big Sky', 'CAA', 'Ivy League', 'MEAC', 'MVFC', 'NEC', 'OVC', 'Patriot', 'Pioneer', 'Southern', 'Southland', 'SWAC'] # Example list, verify!
         initial_rows = len(master_df)
-        fcs_games_mask = master_df['away_conference'].isin(fcs_conferences)
+        fcs_games_mask = master_df['awayConference'].isin(fcs_conferences)
         fcs_games_count = fcs_games_mask.sum()
         if fcs_games_count > 0:
             master_df = master_df[~fcs_games_mask].copy()
@@ -894,11 +894,11 @@ def simulate_betting(simulation_input_df, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD
     results = []
 
     # Ensure necessary columns exist and drop rows with missing critical data for simulation
-    required_cols = ['id', 'season', 'week', 'home_team', 'away_team', 'home_points', 'away_points',
-                     'avg_opening_spread', 'neutral_site', # neutral_site might not be needed if HFA baked into prediction
+    required_cols = ['id', 'season', 'week', 'homeTeam', 'awayTeam', 'homePoints', 'awayPoints',
+                     'avg_opening_spread', 'neutralSite', # neutral_site might not be needed if HFA baked into prediction
                      'predicted_spread_market'] # This comes from the model now
     sim_df = simulation_input_df[required_cols].copy()
-    sim_df.dropna(subset=['avg_opening_spread', 'home_points', 'away_points',
+    sim_df.dropna(subset=['avg_opening_spread', 'homePoints', 'awayPoints',
                            'predicted_spread_market'], inplace=True) # Crucial dropna
 
     if sim_df.empty:
@@ -927,7 +927,7 @@ def simulate_betting(simulation_input_df, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD
         # Grade the bet if one was placed
         if bet_on:
             # REVISED: Actual margin from AWAY team perspective
-            actual_margin = game['away_points'] - game['home_points']
+            actual_margin = game['awayPoints'] - game['homePoints']
 
             if bet_on == 'away':
                 if actual_margin > opening_spread: result, profit_loss = 'win', WIN_PAYOUT
@@ -1035,7 +1035,7 @@ def evaluate_feature_set_with_bets_nan(feature_set_name, features, xgb_params, n
 
 # Run Feature Set Evaluation
 
-def run_feature_set_evaluation(candidate_feature_sets, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df, val_required_cols):
+def run_feature_set_evaluation(candidate_feature_sets, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df, val_required_cols, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD):
     all_results = []
     for name, feature_list in candidate_feature_sets.items():
         # Ensure feature list is not empty and features exist in X_train
@@ -1046,7 +1046,7 @@ def run_feature_set_evaluation(candidate_feature_sets, xgb_params, num_boost_rou
         if len(valid_features) < len(feature_list):
             print(f"\nWarning: Some features for set '{name}' were not found in X_train after filtering.")
 
-        result = evaluate_feature_set_with_bets_nan(name, valid_features, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df, val_required_cols)
+        result = evaluate_feature_set_with_bets_nan(name, valid_features, xgb_params, num_boost_round, X_train, y_train, X_val, y_val, val_df, val_required_cols, WIN_PAYOUT, LOSS_AMOUNT, BET_THRESHOLD)
         all_results.append(result)
     return all_results
 
