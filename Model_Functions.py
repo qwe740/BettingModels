@@ -1294,7 +1294,7 @@ def train_final_model(best_xgb_params, best_features, dtrain_val, dtest):
     # best_iteration = ??? # Need to retrieve this value from tuning results if possible
     # Option 3: Train with early stopping against a small validation split *of the train_val_df*
     # This is safer but adds complexity. Let's use a fixed number for now.
-    num_boost_round_final = 200 # Use the value determined during tuning or a reasonable default
+    num_boost_round_final = 50 # Use the value determined during tuning or a reasonable default
     print(f"Training final XGBoost model with {len(best_features)} features for {num_boost_round_final} rounds...")
     print("Using hyperparameters:", final_xgb_params)
 
