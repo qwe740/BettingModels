@@ -195,13 +195,13 @@ def preprocess_returning_prod_data(rp_df, RP_METRICS_TO_USE, DEFAULT_RP_VALUE):
 def load_ELO_ratings(PRE_GAME_ELO_CSV_PATH):
     print(f"Loading pre-game Elo ratings from: {PRE_GAME_ELO_CSV_PATH}")
     pre_game_elo_df = pd.read_csv(PRE_GAME_ELO_CSV_PATH)
-    pre_game_elo_df = pre_game_elo_df[['game_id', 'home_pregame_elo', 'away_pregame_elo']]
+    pre_game_elo_df = pre_game_elo_df[['game_id', 'homePregameElo', 'awayPregameElo']]
     print(f"Loaded Elo ratings for {len(pre_game_elo_df)} games.")
 
     # Rename columns to avoid conflict with original Elo cols and clarify source
     pre_game_elo_df.rename(columns={
-        'home_pregame_elo': 'home_pregame_elo_calc',
-        'away_pregame_elo': 'away_pregame_elo_calc'
+        'homePregameElo': 'home_pregame_elo_calc',
+        'awayPregameElo': 'away_pregame_elo_calc'
     }, inplace=True)
     print(f"Loaded pre-game Elo ratings.")
     return pre_game_elo_df
@@ -307,8 +307,8 @@ def define_target_variable_basic_features(master_df):
     basic_features = [
         'home_pregame_elo_calc', # Our calculated Elo
         'away_pregame_elo_calc', # Our calculated Elo
-        'neutral_site',
-        'conference_game',
+        'neutralSite',
+        'conferenceGame',
         'season',
         'week'
     ]
@@ -548,8 +548,8 @@ def create_returning_prod_features(master_df, RP_METRICS_TO_USE, RP_ACTIVE_WEEKS
     print("\nUpdating potential features list...")
     # Basic features (ensure these are still relevant and exist)
     basic_features = [col for col in master_df.columns if col in [
-        'home_pregame_elo_calc', 'away_pregame_elo_calc', 'neutral_site',
-        'conference_game', 'season', 'week', 'elo_diff_calc']]
+        'home_pregame_elo_calc', 'away_pregame_elo_calc', 'neutralSite',
+        'conferenceGame', 'season', 'week', 'elo_diff_calc']]
 
     # Get names of the newly created seasonal EWMA and matchup columns
     ewma_cols = [col for col in master_df.columns if '_ewma_lag1' in col]
@@ -1054,7 +1054,7 @@ def run_feature_set_evaluation(candidate_feature_sets, xgb_params, num_boost_rou
 def present_feature_set_evaluation_results(all_results):
     print("\n--- Feature Set Evaluation Summary ---")
     results_df = pd.DataFrame(all_results)
-    results_df.sort_values(by='RMSE', ascending=True, inplace=True) # Sort by primary metric (RMSE)
+    results_df.sort_values(by='Betting ROI', ascending=False, inplace=True) # Sort by primary metric (RMSE)
 
     # Format columns for display
     results_df['RMSE'] = results_df['RMSE'].map('{:.4f}'.format)

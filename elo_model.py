@@ -47,12 +47,12 @@ def load_data(conn):
     # Basic preprocessing
     games_df['completed'] = games_df['completed'].astype(bool)
     games_df = games_df[games_df['completed']].copy() # Only use completed games
-    games_df = games_df.drop(columns=['home_pregame_elo','home_postgame_elo','away_pregame_elo','away_postgame_elo'])
+    games_df = games_df.drop(columns=['homePregameElo','homePostgameElo','awayPregameElo','awayPostgameElo'])
 
     # Identify FCS teams (adjust logic if division column isn't reliable)
     # Simple approach: Assume 'fbs' division exists, others are FCS. Needs verification.
-    games_df['home_is_fbs'] = games_df['home_division'] == 'fbs'
-    games_df['away_is_fbs'] = games_df['away_division'] == 'fbs'
+    games_df['home_is_fbs'] = games_df['homeClassification'] == 'fbs'
+    games_df['away_is_fbs'] = games_df['awayClassification'] == 'fbs'
 
     # Prepare RP data for lookup
     rp_df = rp_df[['season', 'team', RP_METRIC]].set_index(['season', 'team'])
@@ -107,11 +107,11 @@ def run_elo_calculation(games_df, rp_df):
     for index, game in games_df.iterrows():
         season = game['season']
         week = game['week']
-        home_team = game['home_team']
-        away_team = game['away_team']
-        home_score = game['home_points']
-        away_score = game['away_points']
-        neutral_site = game['neutral_site'] == 1
+        home_team = game['homeTeam']
+        away_team = game['awayTeam']
+        home_score = game['homePoints']
+        away_score = game['awayPoints']
+        neutral_site = game['neutralSite'] == 1
         home_is_fbs = game['home_is_fbs']
         away_is_fbs = game['away_is_fbs']
 
@@ -170,10 +170,10 @@ def run_elo_calculation(games_df, rp_df):
             'game_id': game['id'],
             'season': season,
             'week': week,
-            'home_team': home_team,
-            'home_pregame_elo': home_rating,
-            'away_team': away_team,
-            'away_pregame_elo': away_rating
+            'homeTeam': home_team,
+            'homePregameElo': home_rating,
+            'awayTeam': away_team,
+            'awayPregameElo': away_rating
         })
 
         # --- Calculate Elo Update ---
@@ -227,14 +227,14 @@ if __name__ == '__main__':
 
     # --- Merge Elo back into games data ---
     # Use game_id for robust merging
-    games_with_elo = pd.merge(games_df, pre_game_elo_df[['game_id', 'home_pregame_elo', 'away_pregame_elo']],
+    games_with_elo = pd.merge(games_df, pre_game_elo_df[['game_id', 'homePregameElo', 'awayPregameElo']],
                                 left_on='id', right_on='game_id', how='left')
 
     # --- Basic Evaluation / Next Steps ---
     # 1. Calculate Predicted Spread based on Elo
-    games_with_elo['predicted_spread_elo'] = games_with_elo['away_pregame_elo'] - games_with_elo['home_pregame_elo'] + HFA
+    games_with_elo['predicted_spread_elo'] = games_with_elo['awayPregameElo'] - games_with_elo['homePregameElo'] + HFA
     # Adjust for neutral site if needed (remove HFA)
-    games_with_elo.loc[games_with_elo['neutral_site'] == 1, 'predicted_spread_elo'] -= HFA
+    games_with_elo.loc[games_with_elo['neutralSite'] == 1, 'predicted_spread_elo'] -= HFA
 
     # 2. Compare predicted_spread_elo with avg_closing_spread
     # Need to drop games where closing spread is missing for fair comparison
